@@ -1,0 +1,53 @@
+name: Android APK Build
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout code
+      - uses: actions/checkout@v4
+
+      # 2️⃣ Setup Node
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 3️⃣ Install dependencies
+      - name: Install dependencies
+        run: npm install
+
+      # 4️⃣ Install Expo & EAS CLI
+      - name: Install Expo & EAS CLI
+        run: npm install -g expo eas-cli
+
+      # 5️⃣ Build APK with EAS (cloud build)
+      - name: Build APK
+        id: eas_build
+        run: |
+          eas build -p android --profile preview --non-interactive --json > build-output.json
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      # 6️⃣ Extract APK URL from EAS build output
+      - name: Get APK URL
+        id: apk_url
+        run: |
+          cat build-output.json
+          echo "apk_url=$(jq -r '.artifacts.buildUrl' build-output.json)" >> $GITHUB_ENV
+
+      # 7️⃣ Download APK from Expo cloud
+      - name: Download APK
+        run: |
+          curl -L ${{ env.apk_url }} -o attendify-app.apk
+
+      # 8️⃣ Upload APK as GitHub artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: attendify-apk
+          path: attendify-app.apk
