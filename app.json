@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Attendify",
+    "slug": "attendify-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/favicon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Attendify needs Face ID/Touch ID to verify your identity for attendance marking.",
+        "NSLocationWhenInUseUsageDescription": "Attendify needs your location for attendance tracking."
+      },
+      "bundleIdentifier": "com.yourcompany.attendify"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/favicon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "permissions": [
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.yourcompany.attendify"
+    },
+    "plugins": [
+      "expo-local-authentication",
+      "expo-location"
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "fcedcaf4-9686-4714-81ac-e988093effac"
+      }
+    }
+  }
+}
