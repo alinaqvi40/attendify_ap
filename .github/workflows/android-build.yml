@@ -22,11 +22,9 @@ jobs:
         run: npm install -g expo eas-cli
 
       - name: Build APK
-        id: eas_build
-        run: |
-          eas build -p android --profile preview --non-interactive --json > build-output.json
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+  run: eas build -p android --profile preview --non-interactive
+  env:
+    EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Get APK URL
         id: apk_url
