@@ -27,7 +27,11 @@
         "USE_BIOMETRIC",
         "USE_FINGERPRINT",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ],
       "package": "com.yourcompany.attendify"
     },
@@ -37,6 +41,11 @@
     ],
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "fcedcaf4-9686-4714-81ac-e988093effac"
+      }
     }
   }
 }
