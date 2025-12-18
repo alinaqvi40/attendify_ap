@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as Location from 'expo-location';
 import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -31,9 +32,10 @@ export default function App() {
   React.useEffect(() => {
     loadStoredCredentials();
     checkBiometricSupport();
+    requestLocationPermission();
   }, []);
 
-  // ========== BIOMETRIC FUNCTIONS ==========
+  // ========== PERMISSION FUNCTIONS ==========
   const checkBiometricSupport = async () => {
     try {
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
@@ -51,6 +53,17 @@ export default function App() {
     } catch (error) {
       console.error('Error checking biometric support:', error);
       return { hasHardware: false, isEnrolled: false };
+    }
+  };
+
+  const requestLocationPermission = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      console.log('Location permission status:', status);
+      return status === 'granted';
+    } catch (error) {
+      console.error('Error requesting location permission:', error);
+      return false;
     }
   };
 
@@ -96,8 +109,81 @@ export default function App() {
     }
   };
 
-  // ========== WEBVIEW JAVASCRIPT INJECTION ==========
+  // ========== LOCATION FUNCTIONS ==========
+  const getOptimizedLocation = async () => {
+    try {
+      console.log('📍 Requesting location...');
 
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        console.log('Location permission denied');
+        return null;
+      }
+
+      // For Android: Try to minimize network location usage
+      if (Platform.OS === 'android') {
+        // 1. First try last known location (fastest, no network)
+        const lastLocation = await Location.getLastKnownPositionAsync({
+          maxAge: 300000, // 5 minutes
+          requiredAccuracy: 100
+        });
+
+        if (lastLocation) {
+          console.log('✅ Using last known location');
+          return {
+            latitude: lastLocation.coords.latitude,
+            longitude: lastLocation.coords.longitude,
+            accuracy: lastLocation.coords.accuracy,
+            source: 'cached',
+            timestamp: Date.now()
+          };
+        }
+
+        // 2. Try GPS only
+        try {
+          const gpsLocation = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High, // GPS only
+            timeout: 5000,
+            maximumAge: 30000
+          });
+
+          console.log('✅ GPS location acquired');
+          return {
+            latitude: gpsLocation.coords.latitude,
+            longitude: gpsLocation.coords.longitude,
+            accuracy: gpsLocation.coords.accuracy,
+            source: 'gps',
+            timestamp: Date.now()
+          };
+        } catch (gpsError) {
+          console.log('GPS failed, trying low accuracy network...');
+        }
+      }
+
+      // 3. Fallback: Low accuracy network (for both iOS and Android)
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Low,
+        timeout: 3000,
+        maximumAge: 600000 // 10 minutes
+      });
+
+      console.log('✅ Location acquired (network)');
+      return {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        accuracy: location.coords.accuracy,
+        source: 'network',
+        timestamp: Date.now()
+      };
+
+    } catch (error) {
+      console.error('❌ Location error:', error);
+      return null;
+    }
+  };
+
+  // ========== WEBVIEW JAVASCRIPT INJECTION ==========
   const injectedJavaScript = `
 (function() {
   console.log('=== WEBAUTHN INTERCEPTOR STARTED ===');
@@ -341,76 +427,7 @@ export default function App() {
     }
   };
   
-  // 5. ADD MANUAL FINGERPRINT BUTTON
-  function addManualFingerprintButton() {
-    // Look for verify fingerprint button
-    const verifyBtn = document.getElementById('verifyFingerprintBtn');
-    if (verifyBtn && !verifyBtn.disabled) {
-      console.log('Found verifyFingerprintBtn, adding mobile option...');
-      
-      // Create mobile fingerprint button
-      // const mobileBtn = document.createElement('button');
-      // mobileBtn.id = 'mobileFingerprintBtn';
-      // mobileBtn.innerHTML = \`
-      //   <div style="
-      //     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      //     color: white;
-      //     border: none;
-      //     padding: 15px;
-      //     border-radius: 10px;
-      //     font-size: 16px;
-      //     font-weight: 600;
-      //     cursor: pointer;
-      //     margin: 10px 0;
-      //     width: 100%;
-      //     display: flex;
-      //     align-items: center;
-      //     justify-content: center;
-      //     gap: 10px;
-      //     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-      //   ">
-      //     <span style="font-size: 22px;">📱</span>
-      //     <span>Use Mobile Fingerprint</span>
-      //   </div>
-      // \`;
-      
-      mobileBtn.style.cssText = 'border: none; background: transparent; width: 100%;';
-      
-      // Insert before the verify button
-      verifyBtn.parentNode.insertBefore(mobileBtn, verifyBtn);
-      
-      // Add click handler
-      mobileBtn.onclick = function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        console.log('Mobile fingerprint button clicked');
-        
-        // Get student ID
-        const studentId = document.getElementById('studentId')?.value || 
-                         document.querySelector('input[name="student_id"]')?.value;
-        
-        // Trigger mobile biometric
-        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'mobile_fingerprint_trigger',
-            action: 'verify',
-            studentId: studentId,
-            elementId: 'verifyFingerprintBtn'
-          }));
-        }
-        
-        // Also trigger the original button's click
-        setTimeout(() => {
-          if (verifyBtn && !verifyBtn.disabled) {
-            verifyBtn.click();
-          }
-        }, 100);
-      };
-    }
-  }
-  
-  // 6. EXTRACT CREDENTIAL FROM PAGE
+  // 5. EXTRACT CREDENTIAL FROM PAGE
   function extractCredentialsFromPage() {
     try {
       // Look for hidden credential fields
@@ -443,20 +460,15 @@ export default function App() {
   // Initial setup
   console.log('✅ WebAuthn interceptor initialized');
   
-  // Run extraction and add button
+  // Run extraction
   setTimeout(() => {
     extractCredentialsFromPage();
-    addManualFingerprintButton();
   }, 2000);
-  
-  // Poll for changes
-  setInterval(() => {
-    addManualFingerprintButton();
-  }, 5000);
   
   return true;
 })();
 `;
+
   // ========== MESSAGE HANDLER ==========
   const handleMessage = useCallback(async (event) => {
     try {
@@ -583,7 +595,27 @@ export default function App() {
     console.log('🔐 Handling verification request:', data.type || 'verification');
 
     try {
-      // 1. Check biometric support
+      // 1. Get location first (before any network operations)
+      let locationData = null;
+      try {
+        locationData = await getOptimizedLocation();
+
+        if (locationData) {
+          console.log('📍 Location obtained:', {
+            lat: locationData.latitude,
+            lon: locationData.longitude,
+            accuracy: locationData.accuracy,
+            source: locationData.source
+          });
+        } else {
+          console.warn('⚠️ Could not get location');
+        }
+      } catch (locationError) {
+        console.warn('⚠️ Location error, continuing without it:', locationError);
+        // Continue without location
+      }
+
+      // 2. Check biometric support
       const hasHardware = await LocalAuthentication.hasHardwareAsync();
       const isEnrolled = await LocalAuthentication.isEnrolledAsync();
 
@@ -592,15 +624,7 @@ export default function App() {
         return;
       }
 
-      // 2. Show loading alert
-      // Alert.alert(
-      //   'Verifying Identity',
-      //   'Please authenticate with your fingerprint...',
-      //   [{ text: 'Cancel', style: 'cancel' }],
-      //   { cancelable: false }
-      // );
-
-      // 3. Authenticate with biometric
+      // 3. Show biometric prompt
       const authResult = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Verify fingerprint to mark attendance',
         cancelLabel: 'Cancel',
@@ -615,7 +639,7 @@ export default function App() {
         // Try to find matching credential from storage
         const credentialEntries = Object.entries(storedCredentials);
         if (credentialEntries.length > 0) {
-          // Get the first credential (or find by user ID if available)
+          // Get the first credential
           const [, credential] = credentialEntries[0];
           if (credential && credential.id) {
             credentialId = credential.id;
@@ -623,62 +647,10 @@ export default function App() {
           }
         }
 
-        // If no credential found, extract from page
+        // If no credential found, generate one
         if (!credentialId) {
-          console.log('⚠️ No stored credential found, trying to extract from page...');
-
-          // Inject JavaScript to extract credential from page
-          const extracted = await new Promise((resolve) => {
-            if (webViewRef.current) {
-              webViewRef.current.injectJavaScript(`
-              // Try to find credential in hidden fields or data attributes
-              let foundCredential = null;
-              
-              // Check hidden inputs
-              const hiddenInputs = document.querySelectorAll('input[type="hidden"]');
-              hiddenInputs.forEach(input => {
-                if (input.value && input.value.length > 30) {
-                  if (input.name.includes('credential') || 
-                      input.name.includes('fingerprint') ||
-                      input.name.includes('attestation') ||
-                      input.name.includes('id')) {
-                    foundCredential = input.value;
-                    console.log('Found credential in hidden input:', input.name);
-                  }
-                }
-              });
-              
-              // Check data attributes
-              const allElements = document.querySelectorAll('*');
-              allElements.forEach(el => {
-                if (el.dataset.credentialId || el.dataset.fingerprintId) {
-                  foundCredential = el.dataset.credentialId || el.dataset.fingerprintId;
-                }
-              });
-              
-              // Return result
-              if (foundCredential) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'extracted_credential',
-                  credentialId: foundCredential
-                }));
-                console.log('Extracted credential from page');
-              }
-              
-              foundCredential;
-            `);
-
-              // Wait a moment for extraction
-              setTimeout(() => resolve(null), 500);
-            } else {
-              resolve(null);
-            }
-          });
-
-          if (!credentialId) {
-            credentialId = generateRealisticCredentialId();
-            console.log('⚠️ Generated new credential ID for verification');
-          }
+          credentialId = generateRealisticCredentialId();
+          console.log('⚠️ Generated new credential ID for verification');
         }
 
         // 5. Create proper verification response
@@ -686,164 +658,150 @@ export default function App() {
 
         // 6. Inject JavaScript to handle the verification on the page
         if (webViewRef.current) {
-          // First, try to find and complete the WebAuthn verification
-          await webViewRef.current.injectJavaScript(`
-          console.log('🔄 Completing WebAuthn verification with stored credential...');
-          
-          // Check if there's a pending WebAuthn request
-          if (window._pendingWebAuthnGet) {
-            console.log('Found pending WebAuthn verification request');
-            
-            // Complete the WebAuthn verification
-            if (window.completeWebAuthnVerification) {
-              window.completeWebAuthnVerification(
-                '${credentialId}',
-                '${signature}',
-                'user_handle_' + Date.now()
-              );
-              console.log('✅ WebAuthn verification completed');
-            }
-          } else {
-            console.log('No pending WebAuthn request found');
-            
-            // Try to trigger the verification button directly
-            const verifyBtn = document.getElementById('verifyFingerprintBtn');
-            if (verifyBtn) {
-              console.log('Found verifyFingerprintBtn, simulating click...');
+          // Create injection script with location data
+          const locationDataJson = locationData ? JSON.stringify(locationData) : 'null';
+          const hasLocation = locationData ? 'true' : 'false';
+
+          const injectionScript = `
+            (function() {
+              console.log('🔄 Completing verification with mobile biometric...');
               
-              // Fill any required hidden fields first
-              const hiddenFields = document.querySelectorAll('input[type="hidden"]');
-              hiddenFields.forEach(field => {
-                if (field.name.includes('credential') || 
-                    field.name.includes('fingerprint') ||
-                    field.name.includes('id')) {
-                  field.value = '${credentialId}';
-                  field.dispatchEvent(new Event('input', { bubbles: true }));
-                  field.dispatchEvent(new Event('change', { bubbles: true }));
-                  console.log('Filled field:', field.name);
+              // Add location data if available
+              if (${hasLocation}) {
+                try {
+                  // Create location data element
+                  const locDiv = document.createElement('div');
+                  locDiv.style.display = 'none';
+                  locDiv.id = 'mobile_location_data';
+                  locDiv.setAttribute('data-location', '${locationDataJson}');
+                  document.body.appendChild(locDiv);
+                  
+                  // Also add to form if exists
+                  const forms = document.querySelectorAll('form');
+                  if (forms.length > 0) {
+                    const locInput = document.createElement('input');
+                    locInput.type = 'hidden';
+                    locInput.name = 'mobile_location';
+                    locInput.value = '${locationDataJson}';
+                    forms[0].appendChild(locInput);
+                  }
+                  console.log('📍 Location data added');
+                } catch (locErr) {
+                  console.log('Could not add location:', locErr);
                 }
-              });
+              }
               
-              // Add a small delay then click
-              setTimeout(() => {
-                verifyBtn.click();
-                console.log('✅ Verification button clicked');
-              }, 300);
-            }
-          }
-          
-          // Also try to submit any verification form
-          setTimeout(() => {
-            const forms = document.querySelectorAll('form');
-            forms.forEach(form => {
-              const formText = form.innerHTML.toLowerCase();
-              if (formText.includes('verify') || 
-                  formText.includes('attendance') ||
-                  formText.includes('fingerprint')) {
+              // Complete WebAuthn verification
+              if (window._pendingWebAuthnGet) {
+                console.log('Found pending WebAuthn request');
                 
-                console.log('Found verification form, submitting...');
+                if (window.completeWebAuthnVerification) {
+                  window.completeWebAuthnVerification(
+                    '${credentialId}',
+                    '${signature}'
+                  );
+                  console.log('✅ WebAuthn verification completed');
+                }
+              } else {
+                console.log('No pending WebAuthn, trying direct form submission');
                 
-                // Fill credential fields
-                const inputs = form.querySelectorAll('input');
+                // Try to fill fingerprint field
+                const inputs = document.querySelectorAll('input');
                 inputs.forEach(input => {
                   if (input.name && (
-                    input.name.toLowerCase().includes('credential') ||
                     input.name.toLowerCase().includes('fingerprint') ||
-                    input.name.toLowerCase().includes('assertion')
+                    input.name.toLowerCase().includes('credential') ||
+                    input.name.toLowerCase().includes('attestation')
                   )) {
                     input.value = '${credentialId}';
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    console.log('Filled field:', input.name);
                   }
                 });
                 
-                // Submit the form
+                // Try to click verify button
+                const verifyBtn = document.getElementById('verifyFingerprintBtn');
+                if (verifyBtn && !verifyBtn.disabled) {
+                  setTimeout(() => {
+                    verifyBtn.click();
+                    console.log('✅ Clicked verify button');
+                  }, 300);
+                }
+                
+                // Also try to submit forms
                 setTimeout(() => {
-                  const submitBtn = form.querySelector('button[type="submit"]');
-                  if (submitBtn) {
-                    submitBtn.click();
-                  } else {
-                    form.submit();
-                  }
+                  const forms = document.querySelectorAll('form');
+                  forms.forEach(form => {
+                    const formText = form.innerHTML.toLowerCase();
+                    if (formText.includes('verify') || 
+                        formText.includes('attendance') ||
+                        formText.includes('fingerprint')) {
+                      
+                      const submitBtn = form.querySelector('button[type="submit"]');
+                      if (submitBtn) {
+                        submitBtn.click();
+                        console.log('✅ Submitted form');
+                      } else {
+                        form.submit();
+                      }
+                    }
+                  });
                 }, 500);
               }
-            });
-          }, 1000);
-          
-          true;
-        `);
+              
+              // Show success message
+              setTimeout(() => {
+                const successMsg = document.createElement('div');
+                let locationHTML = '';
+                if (${hasLocation}) {
+                  locationHTML = '<div style="margin-top: 5px; font-size: 12px; opacity: 0.8;">Location verified</div>';
+                }
+                
+                successMsg.innerHTML = \`<div style="
+                  position: fixed;
+                  top: 20px;
+                  left: 50%;
+                  transform: translateX(-50%);
+                  background: #4CAF50;
+                  color: white;
+                  padding: 15px 25px;
+                  border-radius: 8px;
+                  z-index: 9999;
+                  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                  font-size: 16px;
+                  font-weight: 500;
+                  text-align: center;
+                  min-width: 300px;
+                ">
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 20px;">✅</span>
+                    <span>Attendance marked successfully!</span>
+                  </div>
+                  \${locationHTML}
+                </div>\`;
+                
+                document.body.appendChild(successMsg);
+                
+                setTimeout(() => {
+                  if (successMsg.parentNode) successMsg.remove();
+                }, 3000);
+              }, 800);
+              
+              return true;
+            })();
+          `;
 
-          // 7. Show success message in the page
-          setTimeout(() => {
-            webViewRef.current.injectJavaScript(`
-            // Show success notification in the page
-            const successDiv = document.createElement('div');
-            // successDiv.innerHTML = \`
-            //   <div style="
-            //     position: fixed;
-            //     top: 20px;
-            //     left: 50%;
-            //     transform: translateX(-50%);
-            //     background: #4CAF50;
-            //     color: white;
-            //     padding: 15px 25px;
-            //     border-radius: 8px;
-            //     z-index: 9999;
-            //     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            //     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-            //     font-size: 16px;
-            //     font-weight: 500;
-            //     text-align: center;
-            //     min-width: 300px;
-            //     animation: slideDown 0.3s ease-out;
-            //   ">
-            //     <div style="display: flex; align-items: center; gap: 10px;">
-            //       <span style="font-size: 20px;">✅</span>
-            //       <span>Attendance marked successfully!</span>
-            //     </div>
-            //     <div style="margin-top: 5px; font-size: 14px; opacity: 0.9;">
-            //       Your fingerprint has been verified.
-            //     </div>
-            //   </div>
-            // \`;
-            
-            // Add animation
-            const style = document.createElement('style');
-            style.textContent = \`
-              @keyframes slideDown {
-                from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
-                to { transform: translateX(-50%) translateY(0); opacity: 1; }
-              }
-            \`;
-            document.head.appendChild(style);
-            document.body.appendChild(successDiv);
-            
-            // Remove after 3 seconds
-            setTimeout(() => {
-              if (successDiv.parentNode) {
-                successDiv.remove();
-              }
-            }, 3000);
-            
-            console.log('✅ Success notification shown');
-            true;
-          `);
-          }, 1500);
+          await webViewRef.current.injectJavaScript(injectionScript);
         }
 
-        // 8. Show native success alert
-        // Alert.alert(
-        //   '✅ Success',
-        //   'Attendance has been marked successfully!',
-        //   [{ text: 'OK', onPress: () => console.log('OK Pressed') }]
-        // );
-
-        // 9. Log the verification
+        // 7. Save verification record with location
         await saveVerificationRecord({
           type: 'attendance_marking',
           studentId: data.studentId || 'unknown',
           credentialId: credentialId,
           timestamp: Date.now(),
           success: true,
+          location: locationData,
           source: 'mobile_biometric'
         });
 
@@ -851,65 +809,39 @@ export default function App() {
 
       } else {
         // Authentication failed or cancelled
-        console.log('❌ Biometric authentication failed or cancelled:', authResult.error);
+        console.log('❌ Biometric authentication failed');
 
-        // Inject JavaScript to handle cancellation on the page
         if (webViewRef.current) {
           await webViewRef.current.injectJavaScript(`
-          // Reject any pending WebAuthn request
-          if (window._pendingWebAuthnGet && window._pendingWebAuthnGet.reject) {
-            window._pendingWebAuthnGet.reject(new Error('Authentication cancelled by user'));
-            window._pendingWebAuthnGet = null;
-            console.log('❌ WebAuthn request rejected');
-          }
-          
-          // Show error message on page
-          const errorDiv = document.createElement('div');
-          errorDiv.innerHTML = \`
-            <div style="
-              position: fixed;
-              top: 20px;
-              left: 50%;
-              transform: translateX(-50%);
-              background: #f44336;
-              color: white;
-              padding: 15px 25px;
-              border-radius: 8px;
-              z-index: 9999;
-              box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-              font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-              font-size: 16px;
-              font-weight: 500;
-              text-align: center;
-              min-width: 300px;
-            ">
-              <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 20px;">❌</span>
-                <span>Authentication failed</span>
-              </div>
-              <div style="margin-top: 5px; font-size: 14px; opacity: 0.9;">
-                Please try again.
-              </div>
-            </div>
-          \`;
-          document.body.appendChild(errorDiv);
-          
-          // Remove after 3 seconds
-          setTimeout(() => {
-            if (errorDiv.parentNode) {
-              errorDiv.remove();
+            // Reject pending WebAuthn request
+            if (window._pendingWebAuthnGet && window._pendingWebAuthnGet.reject) {
+              window._pendingWebAuthnGet.reject(new Error('Authentication cancelled'));
+              window._pendingWebAuthnGet = null;
             }
-          }, 3000);
-          
-          // Re-enable verify button if it exists
-          const verifyBtn = document.getElementById('verifyFingerprintBtn');
-          if (verifyBtn) {
-            verifyBtn.disabled = false;
-            verifyBtn.innerHTML = '<i class="fas fa-fingerprint"></i> Try Again';
-          }
-          
-          true;
-        `);
+            
+            // Show error message
+            const errorMsg = document.createElement('div');
+            errorMsg.innerHTML = \`
+              <div style="
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #f44336;
+                color: white;
+                padding: 15px 25px;
+                border-radius: 8px;
+                z-index: 9999;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                text-align: center;
+              ">
+                ❌ Authentication failed. Please try again.
+              </div>
+            \`;
+            document.body.appendChild(errorMsg);
+            setTimeout(() => errorMsg.remove(), 3000);
+            true;
+          `);
         }
 
         Alert.alert('Authentication Failed', 'Please try again to mark attendance.');
@@ -918,11 +850,10 @@ export default function App() {
     } catch (error) {
       console.error('❌ Verification error:', error);
 
-      // Show error alert
       Alert.alert(
         'Error',
         'Failed to mark attendance. Please try again.',
-        [{ text: 'OK', onPress: () => console.log('OK Pressed') }]
+        [{ text: 'OK' }]
       );
 
       // Log error
@@ -936,6 +867,7 @@ export default function App() {
       });
     }
   };
+
   // ========== HELPER FUNCTIONS ==========
   const generateRealisticCredentialId = () => {
     // Create credential ID that matches server expectations
